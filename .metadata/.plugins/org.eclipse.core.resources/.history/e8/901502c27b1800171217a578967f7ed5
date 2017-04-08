@@ -1,0 +1,407 @@
+package eTRU;
+
+import org.eclipse.jetty.server.Request;
+import org.eclipse.jetty.server.Server;
+import org.eclipse.jetty.server.handler.AbstractHandler;
+import org.eclipse.jetty.server.handler.ContextHandler;
+import org.eclipse.jetty.server.handler.ContextHandlerCollection;
+import org.eclipse.jetty.server.handler.ResourceHandler;
+import org.eclipse.jetty.util.resource.Resource;
+
+import javax.servlet.ServletException;
+import javax.servlet.http.Cookie;
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+
+import java.io.File;
+import java.io.IOException;
+import java.io.PrintWriter;
+import java.util.Collections;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+
+public class Controller {
+	
+	/** instance variables */
+	Server jettyServer;
+	View view;
+	Model model;
+	File file;
+	String currentBookID;
+	
+	/**
+	 * Constructor
+	 * 
+	 * @param baseURL
+	 * @param port
+	 * @throws IOException
+	 */
+	public Controller(String baseURL, int port) throws IOException {
+		// view = new HTMLView(baseURL);
+		jettyServer = new Server(port);
+		model = new Model();
+		view = new View(baseURL, model);
+
+		file = new File("flags_test.txt");
+
+		// We create a ContextHandler, since it will catch requests for us under
+		// a specific path.
+		// This is so that we can delegate to Jetty's default ResourceHandler to
+		// serve static files, e.g. CSS & images.
+		ContextHandler staticCtx = new ContextHandler();
+		staticCtx.setContextPath("/static");
+		ResourceHandler resources = new ResourceHandler();
+		resources.setBaseResource(Resource.newResource("static/"));
+		staticCtx.setHandler(resources);
+
+		// This context handler just points to the "handle" method of this
+		// class.
+		ContextHandler defaultCtx = new ContextHandler();
+		defaultCtx.setContextPath("/");
+		defaultCtx.setHandler(this);
+
+		// Tell Jetty to use these handlers in the following order:
+		ContextHandlerCollection collection = new ContextHandlerCollection();
+		collection.addHandler(staticCtx);
+		collection.addHandler(defaultCtx);
+		jettyServer.setHandler(collection);
+	}
+
+	/**
+	 * Once everything is set up in the constructor, actually start the server
+	 * here:
+	 * 
+	 * @throws Exception
+	 *             if something goes wrong.
+	 */
+	public void run() throws Exception {
+		jettyServer.start();
+		jettyServer.join();
+	}
+
+	/**
+	 * The main callback from Jetty.
+	 * 
+	 * @param resource
+	 *            what is the user asking for from the server?
+	 * @param jettyReq
+	 *            the same object as the next argument, req, just cast to a
+	 *            jetty-specific class (we don't need it).
+	 * @param req
+	 *            http request object -- has information from the user.
+	 * @param resp
+	 *            http response object -- where we respond to the user.
+	 * @throws IOException
+	 *             -- If the user hangs up on us while we're writing back or
+	 *             gave us a half-request.
+	 * @throws ServletException
+	 *             -- If we ask for something that's not there, this might
+	 *             happen.
+	 */
+	@Override
+	public void handle(String resource, Request jettyReq, HttpServletRequest req, HttpServletResponse resp)
+			throws IOException, ServletException {
+		System.out.println(jettyReq);
+
+		ServerRequest request = new ServerRequest(req, resp);
+		System.out.println(request);
+
+		if ("POST".equals(request.method) && "/report".equals(request.path)) {
+			model.reportBook(request.getParameter("book", "ERROR"));
+
+			// tell the browser to redirect the user to list of reported books:
+			request.resp.setStatus(HttpServletResponse.SC_SEE_OTHER);
+			request.resp.setHeader("Location", "/reported");
+			try (PrintWriter out = request.resp.getWriter()) {
+				out.println("/reported");
+			}
+
+			// done.
+			return;
+		}
+
+		if ("POST".equals(request.method) && "/like".equals(request.path)) {
+			// we like a book!
+			model.likeBook(request.getParameter("book", "ERROR"), request);
+
+			// tell the browser to redirect the user to list of reported books:
+			request.resp.setStatus(HttpServletResponse.SC_SEE_OTHER);
+			request.resp.setHeader("Location", "/like");
+			try (PrintWriter out = request.resp.getWriter()) {
+				out.println("/like");
+			}
+
+			// done.
+			return;
+		}
+
+		if ("/settings".equals(request.path)) {
+			if ("POST".equals(request.method)) {
+				// handle update of preferences
+				boolean newShowRandom = request.hasParameter("showRandom");
+				Cookie showRandom = new Cookie("showRandom", "new");
+
+				showRandom.setValue(newShowRandom ? "true" : "false");
+				request.sendCookie(showRandom);
+
+				request.resp.setStatus(HttpServletResponse.SC_SEE_OTHER);
+				request.resp.setHeader("Location", "/settings");
+				try (PrintWriter out = request.resp.getWriter()) {
+					out.println("/settings");
+				}
+
+			} else if ("GET".equals(request.method)) {
+				view.showSettingsForm(request);
+			}
+		}
+
+		if ("/submitUsername".equals(request.path)) {
+			if ("GET".equals(request.method)) {
+
+				String user = request.getParameter("user", "");
+
+				if (!user.equals("")) {
+					Cookie username = new Cookie("user", user);
+					request.sendCookie(username);
+
+					request.resp.setStatus(HttpServletResponse.SC_SEE_OTHER);
+					request.resp.setHeader("Location", "/front");
+					try (PrintWriter out = request.resp.getWriter()) {
+						out.println("/front");
+					}
+
+				} else {
+					resp.sendError(HttpServletResponse.SC_BAD_REQUEST, "Bad user.");
+				}
+
+			}
+		}
+
+		// /userlikes/eva
+		// "/userlikes/"+user
+		// /userlikes?u=eva
+
+		if ("/userlikes".equals(request.path)) {
+			String user = request.getParameter("user", "");
+			
+			if(model.userLikes.containsKey(user)) {
+				
+				Set<String> books = model.userLikes.get(user);
+				List<GutenbergBook> gutBooks = model.getUsersLikedBooks(books);
+				
+				view.showUserLikesPage(user, gutBooks, request);
+			} else { 
+				resp.sendError(HttpServletResponse.SC_BAD_REQUEST, "Bad user.");
+			}
+		}
+
+		if ("/login".equals(request.path)) {
+			view.showLoginPage(request);
+		}
+
+		String path = request.path;
+
+		if ("/reported".equals(path)) {
+			view.ShowReportedPage(model.getReportedBooks(), resp, request);
+			return;
+		} else if ("/like".equals(path)) {
+			view.showLikePage(model.getLikedBooks(), resp, request);
+		}
+
+		String method = req.getMethod();
+		path = req.getPathInfo();
+
+		if ("GET".equals(method)) {
+			// if the path is search it will redirect towards finding the books
+			if ("/search".equals(path)) {
+				handleSearchForm(req, resp, request);
+				return;
+				// if the path is submitFlag it will redirect to submit the flag
+				// for a particular book
+			} else if ("/submitFlag".equals(path)) {
+				handleFlagForm(req, resp, currentBookID);
+				// if the path is review it will redirect towards displaying the
+				// flags for the flagged books
+			} else if ("/review".equals(path)) {
+				view.printReviewPage(file, resp);
+			}
+
+			if ("/robots.txt".equals(path)) {
+				// We're returning a fake file? Here's why:
+				// http://www.robotstxt.org/
+				resp.setContentType("text/plain");
+				try (PrintWriter txt = resp.getWriter()) {
+					txt.println("User-Agent: *");
+					txt.println("Disallow: /");
+				}
+				return;
+			}
+
+			String titleCmd = Util.getAfterIfStartsWith("/title/", path);
+
+			if (titleCmd != null) {
+				char firstChar = titleCmd.charAt(0);
+				String page = req.getParameter("p");
+				if (page == null) {
+					page = "1";
+				}
+
+				view.showBookCollectionPerPage(this.model.getBooksStartingWith(firstChar), req, firstChar,
+						Integer.parseInt(page), "/title/", resp, "Books starting with '" + firstChar + "'", request);
+			}
+
+			// If you'd like to look at books written by authors starting with
+			// the letter
+			String authorBookCmd = Util.getAfterIfStartsWith("/authorBook/", path);
+			if (authorBookCmd != null) {
+				char firstChar = authorBookCmd.charAt(0);
+
+				Map<String, String[]> parameterMap = req.getParameterMap();
+				String page = Util.join(parameterMap.get("p"));
+
+				if (page == null) {
+					page = "1";
+				}
+
+				view.showBookCollectionPerPage(this.model.getAuthorBooksStartingWith(firstChar), req, firstChar,
+						Integer.parseInt(page), "/authorBook/", resp,
+						"Books By Author name starting with '" + firstChar + "'", request);
+			}
+
+			String authorCmd = Util.getAfterIfStartsWith("/author/", path);
+			if (authorCmd != null) {
+				char firstChar = authorCmd.charAt(0);
+
+				Map<String, String[]> parameterMap = req.getParameterMap();
+				String page = Util.join(parameterMap.get("p"));
+
+				if (page == null) {
+					page = "1";
+				}
+
+				view.showAuthorCollectionPerPage(this.model.getAuthorStartingWith(firstChar), firstChar,
+						Integer.parseInt(page), "/author/", resp);
+			}
+
+			String authorPageCmd = Util.getAfterIfStartsWith("/authorPage/", path);
+			if (authorPageCmd != null) {
+
+				Map<String, String[]> parameterMap = req.getParameterMap();
+				String page = Util.join(parameterMap.get("p"));
+
+				if (page == null) {
+					page = "1";
+				}
+
+				Author author = model.getAuthorFromURL(authorPageCmd);
+				if (author != null) {
+					view.showAuthorPage(author, resp, request);
+				}
+			}
+
+			// Check for startsWith and substring
+			String bookId = Util.getAfterIfStartsWith("/book/", path);
+			if (bookId != null) {
+				view.showBookPage(this.model.getBook(bookId), resp, request);
+				currentBookID = bookId;
+			}
+
+			// Front page!
+			if ("/front".equals(path) || "/".equals(path)) {
+				view.showFrontPage(this.model, request, resp);
+				return;
+			}
+		}
+	}
+
+	/**
+	 * When a user submits (enter key) or pressed the "Write!" button, we'll get
+	 * their request in here. This is called explicitly from handle, above.
+	 * 
+	 * @param req
+	 *            -- we'll grab the form parameters from here.
+	 * @param resp
+	 *            -- where to write their "success" page.
+	 * @throws IOException
+	 *             again, real life happens.
+	 */
+	private void handleSearchForm(HttpServletRequest req, HttpServletResponse resp, ServerRequest request)
+			throws IOException {
+		Map<String, String[]> parameterMap = req.getParameterMap();
+
+		// if for some reason, we have multiple "message" fields in our form,
+		// just put a space between them, see Util.join.
+		// Note that message comes from the name="message" parameter in our
+		// <input> elements on our form.
+		String search = Util.join(parameterMap.get("q"));
+		System.out.print("Search: " + search);
+
+		// will turn this into an empty string if no p
+		String page = Util.join(parameterMap.get("p"));
+		// if page number is null, set it to be the first page
+		if (page == null) {
+			page = "1";
+		}
+		// split the letters in the string to find books similar to the letters
+		String[] searches = search.split(" ");
+		// if form is valid
+		if (searches != null) {
+			// Good, got new message from form.
+			resp.setStatus(HttpServletResponse.SC_ACCEPTED);
+			// make s list of matches
+			List<GutenbergBook> matches;
+			// find books similar to the search
+			matches = model.getBooksSimilarToSearch(searches);
+			// show them
+			view.showBookSearchCollection(matches, searches, page, resp, request);
+			return;
+		}
+		// user submitted something weird.
+		resp.sendError(HttpServletResponse.SC_BAD_REQUEST, "Bad user.");
+	}
+
+	/**
+	 * 
+	 * @param req
+	 *            -- we'll grab the form parameters from here.
+	 * @param resp
+	 *            -- where to write their "success" page.
+	 * @throws IOException
+	 *             again, real life happens.
+	 */
+	private void handleFlagForm(HttpServletRequest req, HttpServletResponse resp, String bookID) throws IOException {
+		Map<String, String[]> parameterMap = req.getParameterMap();
+
+		// if for some reason, we have multiple "message" fields in our form,
+		// just put a space between them, see Util.join.
+		// Note that message comes from the name="message" parameter in our
+		// <input> elements on our form.
+		String text = Util.join(parameterMap.get("message"));
+		String user = Util.join(parameterMap.get("user"));
+		String title = Util.join(parameterMap.get("title"));
+
+		// if form is valid
+		if (text != null && user != null) {
+			// Good, got new message from form.
+			resp.setStatus(HttpServletResponse.SC_ACCEPTED);
+			model.submitNewFlag(user, title, text, bookID);
+
+			// Respond!
+			try (PrintWriter html = resp.getWriter()) {
+				view.successfulFlagSubmission(html, user);
+			} catch (IOException ignored) {
+
+			}
+
+			return;
+		}
+
+		// user submitted something weird.
+		resp.sendError(HttpServletResponse.SC_BAD_REQUEST, "Bad user.");
+	}
+	
+	
+
+}

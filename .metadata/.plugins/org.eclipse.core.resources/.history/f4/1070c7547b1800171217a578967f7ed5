@@ -1,0 +1,14 @@
+package eTRU;
+
+public class Controller {
+	
+	/** instance variables */
+	Server jettyServer;
+	HTMLView view;
+	Model model;
+	File file;
+	String currentBookID;
+	
+	
+
+}
